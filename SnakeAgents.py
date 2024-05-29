@@ -39,7 +39,8 @@ class Snake(ABC):
 
         self.fruits_eaten: int = 0
         self.steps_taken = 0
-        self.state: int = 1  # 1 alive 0 dead
+        self.state: int = 1  # 1 alive 0 dead -1 survived
+        self.double_backs = 0
 
     # leave for child classes to define
     @abstractmethod
@@ -75,7 +76,7 @@ class Snake(ABC):
         return move
 
     def fitness(self) -> float:
-        return max(self.fruits_eaten * 100 - self.steps_taken, 1)
+        return max(self.fruits_eaten * 100 - 0.2 * self.steps_taken, 1)
 
     def hot_encode_direction(self) -> list[int, int, int, int]:
         return [1 if self.direction == d else 0 for d in self.DIRECTIONS]

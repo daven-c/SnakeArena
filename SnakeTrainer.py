@@ -11,7 +11,7 @@ import pickle
 class TrainGeneticPlayers:
 
     def __init__(self, pop_size: int = 100, generations: int = 100, epochs: int = 1, mutation_rate: float = 0.1,
-                 mutation_size: float = 0.1, elite_ratio: float = 0.25):
+                 mutation_size: float = 0.1, elite_ratio: float = 0.25, passdown_ratio: float = 0.25):
         self.pop_size = pop_size
         self.generations = generations
         self.epochs = epochs
@@ -21,6 +21,7 @@ class TrainGeneticPlayers:
         self.elite_ratio = elite_ratio
         if int(elite_ratio * pop_size) < 2:
             raise ValueError("elite size must be greater than 2")
+        self.passdown_ratio = passdown_ratio
 
         self.population = [GeneticPlayer.generate_brain()
                            for _ in range(self.pop_size)]
@@ -75,7 +76,9 @@ class TrainGeneticPlayers:
             return np.apply_along_axis(mutate_row, 1, layer)
 
         new_pop = top_brains.copy()
-        for _ in range(self.pop_size - len(top_brains)):
+        mutate_count = round(self.pop_size * self.passdown_ratio)
+        ran_count = self.pop_size - len(top_brains) - mutate_count
+        for _ in range(mutate_count):
             new_brain_A = []
 
             # Selection
@@ -89,8 +92,9 @@ class TrainGeneticPlayers:
                 new_brain_A.append(child_layer_A)
             new_pop.append(new_brain_A)
 
-        if self.pop_size - len(new_pop) == 1:
-            new_pop.append(self.best_brain)
+        for _ in range(ran_count):
+            new_pop.append(GeneticPlayer.generate_brain())
+
         return new_pop
 
     def evolve(self):
@@ -108,11 +112,11 @@ class TrainGeneticPlayers:
                 snakes = [GeneticPlayer(brain=self.population[i], name=f'{gen}-{i}', spawn_point=None,
                                         default_length=default_len, growth_rate=gr, debug=False) for i in
                           range(self.pop_size)]
-                for idx, snake in enumerate(snakes):
-                    game = SnakeGame(snakes=[snake], snake_speed=fps, fruit_count=fruits, moves_cap=250, width=dim,
-                                     tile_size=tile_size, display=False, auto_close=True, print_events=False)
-                    state = game.run()
-                    fitness_scores[idx] += snake.fitness()
+                game = SnakeGame(snakes=snakes, snake_speed=fps, fruit_count=fruits, moves_cap=250, width=dim,
+                                 tile_size=tile_size, display=False, auto_close=True, print_events=False)
+                state = game.run()
+                fitness_scores = [fitness_scores[i] + snakes[i].fitness()
+                                  for i in range(len(snakes))]
 
             # round fitness scores
             fitness_scores = list(
@@ -138,15 +142,15 @@ class TrainGeneticPlayers:
             self.print_event('runtime', round(time.time() - start, 2), 'secs')
 
             play_gen_game = True
-            if play_gen_game and gen % 50 == 0:
+            if play_gen_game and gen % 10 == 0:
                 self.print_event(
                     'gen game', f'{gen}/{self.generations}', indent=1)
-                gen_snake = GeneticPlayer(brain=self.best_brain, name='gen', spawn_point=None,
-                                          default_length=default_len, growth_rate=gr, debug=False)
-                game = SnakeGame(snakes=[gen_snake], snake_speed=30, fruit_count=fruits, moves_cap=1000, width=dim,
+                snakes = [GeneticPlayer(brain=self.population[i], name=f'{gen}-{i}', spawn_point=None,
+                                        default_length=default_len, growth_rate=gr, debug=False) for i in
+                          range(self.pop_size)]
+                game = SnakeGame(snakes=snakes, snake_speed=fps, fruit_count=fruits, moves_cap=250, width=dim,
                                  tile_size=tile_size, display=True, auto_close=True, print_events=False)
                 state = game.run()
-                self.print_event('fitness', gen_snake.fitness(), indent=2)
 
         self.print_event('Completed Evolution',
                          f'{round(time.time() - total_start, 2)} secs', indent=0)
@@ -156,15 +160,15 @@ if __name__ == '__main__':
 
     dim = 40
     tile_size = 20
-    fps = 300
+    fps = 30
     population_size = 1
     fruits = 10
     default_len = 3
     gr = 1
     moves_limit = None
 
-    trainer = TrainGeneticPlayers(pop_size=10, generations=50, epochs=5, mutation_rate=0.1, mutation_size=0.03,
-                                  elite_ratio=.2)
+    trainer = TrainGeneticPlayers(pop_size=50, generations=50, epochs=5, mutation_rate=0.1, mutation_size=0.03,
+                                  elite_ratio=.25, passdown_ratio=0.5)
 
     trainer.evolve()
 

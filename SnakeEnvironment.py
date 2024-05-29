@@ -212,16 +212,16 @@ class SnakeGame:
 
     def get_nn_inputs(self, snake) -> list:  # d-food, d-tail, d-wall, in 8 directions
         closest_fruit = self.get_closest_fruit(snake)
-        fruit_pos_encoded = list(map(int, [snake.head[0] < closest_fruit.pos[0], snake.head[0] > closest_fruit.pos[0],
-                                           snake.head[1] < closest_fruit.pos[1],
-                                           snake.head[1] > closest_fruit.pos[1]]))  # (4,)
-        danger_encoded = [1 if (node in snake.body or any(
-            [node[0] < 0, node[0] >= self.width, node[1] < 0, node[1] >= self.width])) else 0 for node in
+        fruit_pos_encoded = list(map(lambda x: 1 if x else -1, [snake.head[0] < closest_fruit.pos[0], snake.head[0] > closest_fruit.pos[0],
+                                                                snake.head[1] < closest_fruit.pos[1],
+                                                                snake.head[1] > closest_fruit.pos[1]]))  # (4,)
+        safe_dirs_encoded = [-1 if (node in snake.body or any(
+            [node[0] < 0, node[0] >= self.width, node[1] < 0, node[1] >= self.width])) else 1 for node in
             snake.get_adj_nodes(snake.head, only_cardinal=True)]  # (4,)
         direction_encoded = snake.hot_encode_direction()  # (4,)
         tail_direction_encoded = snake.hot_encode_tail_direction()  # (4,)
         # (16,)
-        return fruit_pos_encoded + danger_encoded + direction_encoded + tail_direction_encoded
+        return fruit_pos_encoded + safe_dirs_encoded + direction_encoded + tail_direction_encoded
 
     # (node, distance to fruit)
     def get_pathing_inputs(self, snake) -> list[tuple]:
