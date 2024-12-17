@@ -41,8 +41,15 @@ class Snake(ABC):
         self.steps_taken = 0
         self.state: int = 1  # 1 alive 0 dead -1 survived
         self.double_backs = 0
+        self.moves_without_progress = 0  # New attribute
+        self.last_head_position = None
+
+        self.head_history = []  # New attribute for tracking head positions
+        self.steps_since_last_fruit = 0
+        self.steps_since_last_fruit_total = 0
 
     # leave for child classes to define
+
     @abstractmethod
     def get_move(self, *dummy):
         pass
@@ -76,7 +83,7 @@ class Snake(ABC):
         return move
 
     def fitness(self) -> float:
-        return max(self.fruits_eaten * 100 - 0.2 * self.steps_taken, 1)
+        return max(self.fruits_eaten * 100 - self.steps_since_last_fruit_total, 0) + (self.steps_taken * 0.5) + (self.state * 50)
 
     def hot_encode_direction(self) -> list[int, int, int, int]:
         return [1 if self.direction == d else 0 for d in self.DIRECTIONS]
@@ -101,15 +108,31 @@ class Snake(ABC):
         if prev_transformation != (0, 0):
             if self.is_opposite_direction(self.get_key_from_transformation(prev_transformation)):
                 transformation = prev_transformation
+
         self.head = self.head[0] + \
             transformation[0], self.head[1] + transformation[1]
         self.body.insert(0, self.head)
         self.body.pop(-1)
         self.steps_taken += 1
+        self.steps_since_last_fruit += 1
+
+        if self.last_head_position == self.head:
+            self.moves_without_progress += 1
+        else:
+            self.moves_without_progress = 0
+
+        self.last_head_position = self.head
+
+        # Check and punish for loop
+        self.head_history.insert(0, self.head)
+        # keep only last 10 head positions
+        self.head_history = self.head_history[:10]
 
     def grow(self, growth_rate: int = 1):
         self.body += [self.body[-1]] * growth_rate
         self.length += growth_rate
+        self.steps_since_last_fruit_total += self.steps_since_last_fruit
+        self.steps_since_last_fruit = 0  # reset upon grow
 
     def is_opposite_direction(self, new_direction: str) -> bool:
         if self.direction == 'up':
@@ -160,7 +183,7 @@ class PathingPlayer(Snake):
 
 class GeneticPlayer(Snake):
     # input, hid, hid, output
-    architecture = [16, 24, 24, 24, len(Snake.DIRECTIONS)]
+    architecture = [19, 32, 32, 16, len(Snake.DIRECTIONS)]
 
     def __init__(self, brain, name: str = None, spawn_point: tuple[int, int] or None = None, default_length: int = 3,
                  growth_rate: int = 1, default_direction: str = 'down', debug: bool = False):
@@ -174,8 +197,13 @@ class GeneticPlayer(Snake):
         return 1 / (1 + np.exp(-x))
 
     @staticmethod
-    def ReLu(x):
-        return max(0, x)
+    def leaky_ReLu(x, alpha=0.1):
+        return np.maximum(alpha * x, x)
+
+    @staticmethod
+    def softmax(x):
+        e_x = np.exp(x - np.max(x))
+        return e_x / e_x.sum()
 
     @classmethod
     def generate_brain(cls):
@@ -183,21 +211,21 @@ class GeneticPlayer(Snake):
                 range(1, len(cls.architecture))]
 
     def get_move(self, inputs: list):
-        hidden_act = self.ReLu
-        output_act = self.sigmoid
+        hidden_act = self.leaky_ReLu
+        output_act = self.softmax
 
         input_vector = np.array(inputs + [1])  # [1] represents bias
         hidden_layer1, hidden_layer2, hidden_layer3, output_layer = self.current_brain
 
         # Forward propagation
-        Ho1 = np.append(
-            np.apply_along_axis(func1d=lambda row: hidden_act(np.dot(input_vector, row)), axis=1, arr=hidden_layer1), 1)
-        Ho2 = np.append(np.apply_along_axis(func1d=lambda row: hidden_act(np.dot(Ho1, row)), axis=1, arr=hidden_layer2),
-                        1)
-        Ho3 = np.append(np.apply_along_axis(func1d=lambda row: hidden_act(np.dot(Ho2, row)), axis=1, arr=hidden_layer2),
-                        1)
-        Zo = np.apply_along_axis(func1d=lambda row: output_act(
-            np.dot(Ho3, row)), axis=1, arr=output_layer)
+        Ho1 = hidden_act(np.dot(hidden_layer1, input_vector))
+        Ho1 = np.append(Ho1, 1)
+        Ho2 = hidden_act(np.dot(hidden_layer2, Ho1))
+        Ho2 = np.append(Ho2, 1)
+        Ho3 = hidden_act(np.dot(hidden_layer3, Ho2))
+        Ho3 = np.append(Ho3, 1)
+        Zo = output_act(np.dot(output_layer, Ho3))
+
         max_index = np.argmax(Zo)
         move = list(self.DIRECTIONS.keys())[max_index]
 

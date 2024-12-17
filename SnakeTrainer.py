@@ -1,11 +1,19 @@
 import time
-from numpy.random import choice, uniform
+from numpy.random import choice, uniform, normal
 from SnakeAgents import *
 from SnakeEnvironment import SnakeGame
 from matplotlib import pyplot as plt
 from random import sample
 import statistics
 import pickle
+import multiprocessing
+
+DIM = 40
+TILE_SIZE = 20
+FPS = 30
+FRUITS = 1
+DEFAULT_LEN = 3
+GR = 1
 
 
 class TrainGeneticPlayers:
@@ -27,6 +35,7 @@ class TrainGeneticPlayers:
                            for _ in range(self.pop_size)]
         self.gen_max_scores = []
         self.best_brain = None
+        self.max_gen_snake = None
 
     @staticmethod
     def print_event(event, *args, indent: int = 1):
@@ -66,18 +75,34 @@ class TrainGeneticPlayers:
 
             return child1_layer
 
+        def single_point_layer_crossover(parent1_layer: np.array, parent2_layer: np.array) -> np.array:
+            child_layer = parent1_layer.copy()
+            for row_idx in range(len(parent1_layer)):
+                row_len = len(parent1_layer[row_idx])
+                splice = sample(range(1, row_len - 1), 1)[0]
+                child_layer[row_idx][splice:] = parent2_layer[row_idx][splice:]
+            return child_layer
         # adjusts each value in a layer based on rate and size
+
         def mutate_layer(layer) -> np.array:
             def mutate_row(row: np.array) -> np.array:
                 return np.array(list(
-                    map(lambda x: x + uniform(-1, 1) * self.mutation_size if uniform(0, 1) < self.mutation_rate else x,
+                    map(lambda x: x + normal(0, self.mutation_size) if uniform(0, 1) < self.mutation_rate else x,
                         row)))
 
             return np.apply_along_axis(mutate_row, 1, layer)
 
+        def mutate_value(layer) -> np.array:
+            row_idx = sample(range(0, len(layer)), 1)[0]
+            col_idx = sample(range(0, len(layer[row_idx])), 1)[0]
+            layer[row_idx][col_idx] += normal(0, self.mutation_size)
+            return layer
+
         new_pop = top_brains.copy()
         mutate_count = round(self.pop_size * self.passdown_ratio)
         ran_count = self.pop_size - len(top_brains) - mutate_count
+
+        # Mutate and Crossover
         for _ in range(mutate_count):
             new_brain_A = []
 
@@ -86,9 +111,19 @@ class TrainGeneticPlayers:
 
             # Crossover and Mutation
             for layer_idx in range(len(GeneticPlayer.architecture) - 1):
-                crossed_layer_A = multipoint_layer_crossover(
-                    parent1[layer_idx], parent2[layer_idx], crossovers=2)
-                child_layer_A = mutate_layer(crossed_layer_A)
+
+                rand = uniform(0, 1)
+                if rand < .33:
+                    crossed_layer_A = multipoint_layer_crossover(
+                        parent1[layer_idx], parent2[layer_idx], crossovers=2)
+                    child_layer_A = mutate_layer(crossed_layer_A)
+                elif rand < .66:
+                    crossed_layer_A = single_point_layer_crossover(
+                        parent1[layer_idx], parent2[layer_idx])
+                    child_layer_A = mutate_layer(crossed_layer_A)
+                else:
+                    child_layer_A = mutate_value(parent1[layer_idx])
+
                 new_brain_A.append(child_layer_A)
             new_pop.append(new_brain_A)
 
@@ -97,30 +132,31 @@ class TrainGeneticPlayers:
 
         return new_pop
 
+    def play_game(self, brain_idx, gen):
+        snake = GeneticPlayer(brain=self.population[brain_idx], name=f'{gen}-{brain_idx}', spawn_point=None,
+                              default_length=DEFAULT_LEN, growth_rate=GR, debug=False)
+        game = SnakeGame(snakes=[snake], snake_speed=FPS, fruit_count=FRUITS, moves_cap=250 + (snake.length * 20), width=DIM,
+                         tile_size=TILE_SIZE, display=False, auto_close=True, print_events=False)
+        state = game.run()
+        return snake.fitness(), snake
+
     def evolve(self):
         total_start = time.time()
-
-        train_type = 'single'
 
         for gen in range(1, self.generations + 1):
             self.print_event(
                 'Generation', f'{gen}/{self.generations}', indent=0)
             fitness_scores = [0 for _ in range(self.pop_size)]
             start = time.time()
+            snakes = []
 
-            for e in range(1, self.epochs + 1):
-                snakes = [GeneticPlayer(brain=self.population[i], name=f'{gen}-{i}', spawn_point=None,
-                                        default_length=default_len, growth_rate=gr, debug=False) for i in
-                          range(self.pop_size)]
-                game = SnakeGame(snakes=snakes, snake_speed=fps, fruit_count=fruits, moves_cap=250, width=dim,
-                                 tile_size=tile_size, display=False, auto_close=True, print_events=False)
-                state = game.run()
-                fitness_scores = [fitness_scores[i] + snakes[i].fitness()
-                                  for i in range(len(snakes))]
+            with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+                results = pool.starmap(
+                    self.play_game, [(i, gen) for i in range(self.pop_size)])
+                fitness_scores, snakes = zip(*results)
 
             # round fitness scores
-            fitness_scores = list(
-                map(lambda fs: round(fs / self.epochs, 2), fitness_scores))
+            fitness_scores = list(map(lambda fs: round(fs, 2), fitness_scores))
 
             # Select best brains
             top_brain_indexes = list(np.argsort(fitness_scores))[::-1][
@@ -131,10 +167,14 @@ class TrainGeneticPlayers:
 
             # save best snake from generation
             self.gen_max_scores.append(top_brains_fitness[0])
-            self.print_event('mean fitness', statistics.mean(fitness_scores))
-            self.print_event('max fitness', top_brains_fitness[0])
-            if len(self.gen_max_scores) >= 2 and self.gen_max_scores[-1] > self.gen_max_scores[-2]:
+
+            if self.max_gen_snake == None or self.gen_max_scores[-1] > self.max_gen_snake.fitness():
+                self.max_gen_snake = snakes[top_brain_indexes[0]]
                 self.best_brain = top_brains[0]
+
+            self.print_event('mean fitness', round(
+                statistics.mean(fitness_scores), 2))
+            self.print_event('max fitness', top_brains_fitness[0])
 
             # Create new population using crossover, mutation
             self.population = self.reproduce(top_brains, top_brains_fitness)
@@ -145,11 +185,9 @@ class TrainGeneticPlayers:
             if play_gen_game and gen % 10 == 0:
                 self.print_event(
                     'gen game', f'{gen}/{self.generations}', indent=1)
-                snakes = [GeneticPlayer(brain=self.population[i], name=f'{gen}-{i}', spawn_point=None,
-                                        default_length=default_len, growth_rate=gr, debug=False) for i in
-                          range(self.pop_size)]
-                game = SnakeGame(snakes=snakes, snake_speed=fps, fruit_count=fruits, moves_cap=250, width=dim,
-                                 tile_size=tile_size, display=True, auto_close=True, print_events=False)
+
+                game = SnakeGame(snakes=[self.max_gen_snake], snake_speed=FPS, fruit_count=FRUITS, moves_cap=1000, width=DIM,
+                                 tile_size=TILE_SIZE, display=True, auto_close=True, print_events=False)
                 state = game.run()
 
         self.print_event('Completed Evolution',
@@ -158,17 +196,8 @@ class TrainGeneticPlayers:
 
 if __name__ == '__main__':
 
-    dim = 40
-    tile_size = 20
-    fps = 30
-    population_size = 1
-    fruits = 10
-    default_len = 3
-    gr = 1
-    moves_limit = None
-
-    trainer = TrainGeneticPlayers(pop_size=50, generations=50, epochs=5, mutation_rate=0.1, mutation_size=0.03,
-                                  elite_ratio=.25, passdown_ratio=0.5)
+    trainer = TrainGeneticPlayers(pop_size=100, generations=30, epochs=3, mutation_rate=0.3, mutation_size=0.03,
+                                  elite_ratio=.05, passdown_ratio=0.80)
 
     trainer.evolve()
 
@@ -185,8 +214,8 @@ if __name__ == '__main__':
     # print(trainer.gen_avg_scores)
     print("playing final game", input('press enter '))
 
-    apex_snake = GeneticPlayer(brain=trainer.best_brain, name='apex', spawn_point=None, default_length=default_len,
-                               growth_rate=gr, debug=False)
-    game = SnakeGame(snakes=[apex_snake], snake_speed=30, fruit_count=5, moves_cap=None, width=dim, tile_size=tile_size,
+    apex_snake = GeneticPlayer(brain=trainer.best_brain, name='apex', spawn_point=None, default_length=DEFAULT_LEN,
+                               growth_rate=GR, debug=False)
+    game = SnakeGame(snakes=[apex_snake], snake_speed=FPS, fruit_count=FRUITS, moves_cap=None, width=DIM, tile_size=TILE_SIZE,
                      display=True, auto_close=False, print_events=True)
     final_state = game.run()

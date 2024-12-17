@@ -1,8 +1,13 @@
+import os
 import math
 import time
 from itertools import chain
 import pygame
 from SnakeAgents import *
+
+# Suppress Pygame Hello message
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+
 
 BLACK = pygame.Color(0, 0, 0)
 GREY = pygame.Color(150, 150, 150)
@@ -125,19 +130,21 @@ class SnakeGame:
         return [snake for snake in self.snakes if snake.state == 1]
 
     # return a list of tiles which are occupied
-    def get_occupied_tiles(self) -> list:
-        fruits = [fruit.pos for fruit in self.fruits]
-        snakes = list(chain.from_iterable(
+    def get_occupied_tiles(self) -> set:
+        fruits = {fruit.pos for fruit in self.fruits}
+        snakes = set(chain.from_iterable(
             [snake.body for snake in self.get_living_snakes()]))
-        return fruits + snakes
+        return fruits.union(snakes)
 
     def regen_fruit(self, fruit):
         taken = self.get_occupied_tiles()
         attempts = 0
-        while fruit.pos in taken:  # regenerate fruit pos
+        max_attempts = self.width * self.width
+        while fruit.pos in taken:
             attempts += 1
             fruit.pos = self.get_random_location(0, self.width)
-            if attempts > 1000:
+            if attempts > max_attempts:
+                print("Unable to relocate fruit")
                 break
 
     # updates the leader based on number of fruits eaten and alive
@@ -158,9 +165,9 @@ class SnakeGame:
             return True
         # self collision
         if self_collisions:
-            for block in snake.body[1:]:
-                if snake.head == block:
-                    return True
+            body_set = set(snake.body[1:])
+            if snake.head in body_set:
+                return True
         return False
 
     # helper function to move snake to dead snakes and updates leader
@@ -210,18 +217,54 @@ class SnakeGame:
         look_in_direction(current=origin)
         return items
 
-    def get_nn_inputs(self, snake) -> list:  # d-food, d-tail, d-wall, in 8 directions
+    import numpy as np
+
+    def get_nn_inputs(self, snake) -> list:
         closest_fruit = self.get_closest_fruit(snake)
-        fruit_pos_encoded = list(map(lambda x: 1 if x else -1, [snake.head[0] < closest_fruit.pos[0], snake.head[0] > closest_fruit.pos[0],
-                                                                snake.head[1] < closest_fruit.pos[1],
-                                                                snake.head[1] > closest_fruit.pos[1]]))  # (4,)
-        safe_dirs_encoded = [-1 if (node in snake.body or any(
-            [node[0] < 0, node[0] >= self.width, node[1] < 0, node[1] >= self.width])) else 1 for node in
-            snake.get_adj_nodes(snake.head, only_cardinal=True)]  # (4,)
-        direction_encoded = snake.hot_encode_direction()  # (4,)
-        tail_direction_encoded = snake.hot_encode_tail_direction()  # (4,)
-        # (16,)
-        return fruit_pos_encoded + safe_dirs_encoded + direction_encoded + tail_direction_encoded
+        head = snake.head
+        width = self.width
+
+        # 1. Distance to fruit
+        fruit_dx = (closest_fruit.pos[0] - head[0]) / width  # Normalized
+        fruit_dy = (closest_fruit.pos[1] - head[1]) / width  # Normalized
+
+        # 2. Distance to Walls
+        wall_up = head[1] / width - 0.5
+        wall_down = (width - head[1]) / width - 0.5
+        wall_left = head[0] / width - 0.5
+        wall_right = (width - head[0]) / width - 0.5
+
+        # 3. Distance to self
+        body_distances = []
+        for body_part in snake.body[1:]:
+            dx = (body_part[0] - head[0]) / width
+            dy = (body_part[1] - head[1]) / width
+            distance = np.sqrt(dx**2 + dy**2)
+            body_distances.append(distance)
+
+        if body_distances:
+            min_body_distance = min(body_distances)
+        else:
+            min_body_distance = 1  # Arbitrary
+
+        # 4. Safe directions
+        safe_dirs_encoded = [(1 - (np.sqrt((node[0] - head[0])**2 + (node[1] - head[1])**2) / width)) if (node not in snake.body and not any([node[0] < 0, node[0] >= width, node[1] < 0, node[1] >= width])) else -1
+                             for node in snake.get_adj_nodes(snake.head, only_cardinal=True)]  # (4,)
+
+        # 5. Direction Information
+        direction_encoded = snake.hot_encode_direction()
+
+        prev_direction = (snake.body[0][0] - snake.body[1][0] if len(snake.body) > 1 else 0,
+                          snake.body[0][1] - snake.body[1][1] if len(snake.body) > 1 else 0)
+
+        if prev_direction == (0, 0):
+            prev_dir_encoded = [0, 0, 0, 0]
+        else:
+            prev_dir_encoded = [1 if Snake.get_key_from_transformation(
+                prev_direction) == d else 0 for d in Snake.DIRECTIONS]
+
+        # Combine inputs
+        return [fruit_dx, fruit_dy, wall_up, wall_down, wall_left, wall_right, min_body_distance] + safe_dirs_encoded + direction_encoded + prev_dir_encoded
 
     # (node, distance to fruit)
     def get_pathing_inputs(self, snake) -> list[tuple]:
@@ -342,9 +385,7 @@ class SnakeGame:
     # -MAIN- #########################################################################################################################
 
     # plays a single frame
-
     def step(self) -> dict:
-
         if self.start_time == -1:
             self.start_time = time.time()
 
