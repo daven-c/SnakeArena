@@ -1,53 +1,57 @@
-# Snake AI - Genetic Algorithm
+# SnakeArena — Neuroevolution for Snake
 
-This project implements a Snake game and trains an AI agent to play it using a genetic algorithm.
+A from-scratch Snake environment plus a **genetic algorithm** that evolves neural-network controllers to play it. No RL library, no PyTorch — just NumPy, `multiprocessing`, and a fitness function that rewards eating fruit while surviving.
 
-## Project Structure
+The goal was to see how far a *gradient-free* evolutionary approach could push a small MLP in a classic RL playground, and to squeeze every drop of speed out of pure Python for the training loop.
 
-*   `SnakeAgents.py`: Contains the different snake agent classes (`Snake`, `RandomPlayer`, `PathingPlayer`, `GeneticPlayer`).
-*   `SnakeEnvironment.py`: Defines the `SnakeGame` environment, game logic, and rendering.
-*   `SnakeTrainer.py`: Implements the genetic algorithm for training `GeneticPlayer` agents.
-*   `SnakeMain.py`:  Allows the user to run the game with different types of snakes.
-*   `model.obj`: Stores the trained neural network weights.
+## What's here
 
-## How to Run
+| File                    | Role                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `SnakeEnvironment.py`   | Grid, food spawning, collision, rendering — the Snake game itself                   |
+| `SnakeAgents.py`        | `Snake` base class + `RandomPlayer`, `PathingPlayer` (A*-ish baseline), `GeneticPlayer` (NN) |
+| `SnakeTrainer.py`       | Genetic algorithm: population, fitness eval, tournament selection, crossover, mutation |
+| `SnakeMain.py`          | Interactive runner — pick an agent, watch it play                                    |
+| `model.obj`             | Serialised weights of the best evolved snake                                          |
 
-1.  **Training:**
-    *   Run `SnakeTrainer.py` to train the AI agent.
-    *   The training process will save the best trained neural network weights in `model.obj`
-    *   A graph will display the performance of the best snake agent in each generation.
+## Approach
 
-    ```bash
-    python SnakeTrainer.py
-    ```
+- **Genome = flattened weights** of a small MLP that maps local grid observations → next-move logits.
+- **Fitness** rewards fruit eaten, length, and survival time; punishes double-backs and long fruitless wanders.
+- **Selection** is tournament-based; **crossover** blends parent weight matrices; **mutation** adds Gaussian noise with a configurable rate.
+- **Multiprocessing pool** evaluates the population in parallel — the biggest wall-clock win.
+- **Vectorised NumPy** for the forward pass instead of per-neuron Python loops.
+- **Sets over lists** for collision + fruit-location lookups (O(1) instead of O(n)).
 
-2.  **Playing the Game:**
-    *   Run `SnakeMain.py` to play the game using different agents.
-    *   To run the best agent, select index `2`.
+## Run it
 
-    ```bash
-    python SnakeMain.py
-    ```
+Install deps and train:
 
-## Key Concepts
+```bash
+pip install -r requirements.txt
+python SnakeTrainer.py    # trains, saves model.obj, plots per-generation best fitness
+```
 
-*   **Genetic Algorithm:** The AI is trained using a genetic algorithm which evolves a population of neural networks.
-*   **Neural Network:** The `GeneticPlayer` uses a neural network to determine its next move.
-*  **Multiprocessing:** The training algorithm utilises the multiprocessing library to decrease training time.
-*   **Fitness Function:** A custom fitness function rewards snakes for eating, length, and survival.
-*   **Mutation and Crossover:** Techniques used to generate new AI agents from current ones.
+Watch the best agent play:
 
-## Optimization notes
-*    **Vectorization**: The training algorithm implements vectorization to improve the speed of the neural network calculations.
-*    **Memory Use**: Many changes have been made to decrease unnecessary memory use.
-*   **Data Structures:** `sets` have been implemented in place of `lists` for collision detection and tracking of fruit location.
+```bash
+python SnakeMain.py       # then choose agent index 2 (GeneticPlayer)
+```
 
-## Requirements
+## Baseline comparison
 
-*   Present in requirements.txt
+`SnakeMain.py` ships three agents so you can eyeball the delta:
 
-##  Further Improvements
+- `RandomPlayer` — pure noise, sanity check for the environment.
+- `PathingPlayer` — greedy shortest-path to fruit, ignores tail collisions.
+- `GeneticPlayer` — evolved MLP, learns to keep escape routes open.
 
-*   Experiment with different neural network architectures, mutation strategies, and crossover methods to improve performance.
-*   Implement a more sophisticated evaluation method.
-*   Try using advanced genetic algorithm techniques.
+## Possible next steps
+
+- Try different MLP architectures + activation functions.
+- Add novelty search or MAP-Elites to reduce fitness plateauing.
+- Port the hot loop to Cython/Numba for another order-of-magnitude speedup.
+
+## Status
+
+Personal ML project. Complete and reproducible; not a package.
